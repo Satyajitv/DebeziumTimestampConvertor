@@ -644,8 +644,6 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
         }
         Date rawTimestamp = sourceTranslator.toRaw(config, timestamp);
         TimestampTranslator targetTranslator;
-        //String check12 = originalType.name();
-        //Object check13 = config.field;
         if (originalType.name().equals(config.field)) {
             targetTranslator = TRANSLATORS.get(config.type);
         } else {
