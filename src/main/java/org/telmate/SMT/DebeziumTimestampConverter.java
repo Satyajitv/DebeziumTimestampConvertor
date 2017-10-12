@@ -245,7 +245,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
         TRANSLATORS.put(TYPE_EPCOH_DATE, new TimestampTranslator() {
             @Override
             public Date toRaw(Config config, Object orig) {
-                return new Date(LocalDate.ofEpochDay((Integer) orig).getYear(), LocalDate.ofEpochDay((Integer) orig).getMonthValue(), LocalDate.ofEpochDay((Integer) orig).getDayOfMonth());
+                return Date.from(java.time.LocalDate.ofEpochDay((Integer) orig).atStartOfDay(ZoneId.systemDefault()).toInstant());
             }
 
             @Override
