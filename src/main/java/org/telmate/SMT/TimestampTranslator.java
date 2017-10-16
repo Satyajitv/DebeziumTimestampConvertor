@@ -21,7 +21,7 @@ public interface TimestampTranslator {
     /**
      * Convert from the universal java.util.Date format to the type-specific format
      */
-    Object toType(DebeziumTimestampConverter.Config config, Date orig);
+    Object toType(DebeziumTimestampConverter.Config config, Date orig,String format);
 
     Schema optionalSchema();
 }

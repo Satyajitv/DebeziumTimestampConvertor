@@ -24,6 +24,7 @@ import org.apache.kafka.connect.transforms.util.SimpleConfig;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.Date;
 import java.util.stream.Stream;
@@ -43,8 +44,11 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
 
     public static final String TARGET_TYPE_CONFIG = "target.type";
 
-    public static final String FORMAT_CONFIG = "format";
-    private static final String FORMAT_DEFAULT = "";
+    public static final String TIMESTAMP_FORMAT_CONFIG = "timestamp.format";
+    private static final String TIMESTAMP_FORMAT_DEFAULT = "yyyy-MM-dd HH:mm:ss";
+
+    public static final String DATE_FORMAT_CONFIG = "date.format";
+    private static final String DATE_FORMAT_DEFAULT = "yyyy-MM-dd";
 
     public static final String FIELD_TYPE_CONFIG = "field.type";
     private static final String FIELD_TYPE_DEFAULT = "empty.value";
@@ -58,8 +62,11 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
                     "The field containing the timestamp, or empty if the entire value is a timestamp")
             .define(TARGET_TYPE_CONFIG, ConfigDef.Type.STRING, ConfigDef.Importance.LOW,
                     "The desired timestamp representation: string, unix, Date, Time, or Timestamp")
-            .define(FORMAT_CONFIG, ConfigDef.Type.STRING, FORMAT_DEFAULT, ConfigDef.Importance.LOW,
+            .define(TIMESTAMP_FORMAT_CONFIG, ConfigDef.Type.STRING, TIMESTAMP_FORMAT_DEFAULT, ConfigDef.Importance.LOW,
                     "A SimpleDateFormat-compatible format for the timestamp. Used to generate the output when type=string "
+                            + "or used to parse the input if the input is a string.")
+            .define(DATE_FORMAT_CONFIG, ConfigDef.Type.STRING, DATE_FORMAT_DEFAULT, ConfigDef.Importance.LOW,
+                    "A SimpleDateFormat-compatible format for the date. Used to generate the output when type=string "
                             + "or used to parse the input if the input is a string.")
             .define(FIELD_TYPE_CONFIG, ConfigDef.Type.STRING, FIELD_TYPE_DEFAULT, ConfigDef.Importance.LOW, "is a comma seperated string, providing an option to add multiple converters.\n" +
                     "<Type of Timestamp Object> -> <To Target type>\n" +
@@ -112,9 +119,13 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
             }
 
             @Override
-            public String toType(Config config, Date orig) {
+            public String toType(Config config, Date orig,String format) {
                 synchronized (config.format) {
-                    return config.format.format(orig);
+                    if (format==DATE_FORMAT_CONFIG){
+                        return config.dateFormat.format(orig);
+                    }else {
+                        return config.format.format(orig);
+                    }
                 }
             }
 
@@ -138,7 +149,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
             }
 
             @Override
-            public Long toType(Config config, Date orig) {
+            public Long toType(Config config, Date orig,String format) {
                 return Timestamp.fromLogical(Timestamp.SCHEMA, orig);
             }
 
@@ -163,7 +174,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
             }
 
             @Override
-            public Date toType(Config config, Date orig) {
+            public Date toType(Config config, Date orig,String format) {
                 Calendar result = Calendar.getInstance(UTC);
                 result.setTime(orig);
                 result.set(Calendar.HOUR_OF_DAY, 0);
@@ -196,7 +207,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
             }
 
             @Override
-            public Date toType(Config config, Date orig) {
+            public Date toType(Config config, Date orig,String format) {
                 Calendar origCalendar = Calendar.getInstance(UTC);
                 origCalendar.setTime(orig);
                 Calendar result = Calendar.getInstance(UTC);
@@ -230,7 +241,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
             }
 
             @Override
-            public Date toType(Config config, Date orig) {
+            public Date toType(Config config, Date orig,String format) {
                 return orig;
             }
 
@@ -254,7 +265,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
             }
 
             @Override
-            public Object toType(Config config, Date orig) {
+            public Object toType(Config config, Date orig,String format) {
                 Calendar origCalendar = Calendar.getInstance(UTC);
                 origCalendar.setTime(orig);
                 Calendar result = Calendar.getInstance(UTC);
@@ -324,10 +335,11 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
     // This is a bit unusual, but allows the transformation config to be passed to static anonymous classes to customize
     // their behavior
     public static class Config {
-        Config(String field, String type, SimpleDateFormat format, String[] field_type, String[] struct_field) {
+        Config(String field, String type, SimpleDateFormat format,SimpleDateFormat dateFormat, String[] field_type, String[] struct_field) {
             this.field = field;
             this.type = type;
             this.format = format;
+            this.dateFormat = dateFormat;
             this.field_type = field_type;
             this.struct_field = struct_field;
         }
@@ -335,6 +347,7 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
         String field;
         String type;
         SimpleDateFormat format;
+        SimpleDateFormat dateFormat;
         String[] field_type;
         String[] struct_field;
     }
@@ -351,7 +364,8 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
         final String[] field_type = simpleConfig.getString(FIELD_TYPE_CONFIG).split(",");
         final String[] struct_field = simpleConfig.getString(STRUCT_FIELD_NAME_CONFIG).split(",");
         String[] structTypeList = new String[]{type};
-        String formatPattern = simpleConfig.getString(FORMAT_CONFIG);
+        String formatPatternTimestamp = simpleConfig.getString(TIMESTAMP_FORMAT_CONFIG);
+        String formatPatternDate = simpleConfig.getString(DATE_FORMAT_CONFIG);
         schemaUpdateCache = new SynchronizedCache<>(new LRUCache<Schema, Schema>(16));
 
         if (!field_type[0].equals(FIELD_TYPE_DEFAULT)) {
@@ -366,22 +380,35 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
                 throw new ConfigException("Unknown timestamp type in TimestampConverter: " + typeCheck + ". Valid values are "
                         + Utils.join(VALID_TYPES, ", ") + ".");
             }
-            if (typeCheck.equals(TYPE_STRING) && formatPattern.trim().isEmpty()) {
+            if (typeCheck.equals(TYPE_STRING) && formatPatternTimestamp.trim().isEmpty()) {
                 throw new ConfigException("TimestampConverter requires format option to be specified when using string timestamps");
+            }
+            if (typeCheck.equals(TYPE_STRING) && formatPatternDate.trim().isEmpty()) {
+                throw new ConfigException("TimestampConverter requires format option to be specified when using string dates");
             }
         }
 
         SimpleDateFormat format = null;
-        if (formatPattern != null && !formatPattern.trim().isEmpty()) {
+        SimpleDateFormat dateFormat = null;
+        if (formatPatternTimestamp != null && !formatPatternTimestamp.trim().isEmpty()) {
             try {
-                format = new SimpleDateFormat(formatPattern);
+                format = new SimpleDateFormat(formatPatternTimestamp);
                 format.setTimeZone(UTC);
             } catch (IllegalArgumentException e) {
                 throw new ConfigException("TimestampConverter requires a SimpleDateFormat-compatible pattern for string timestamps: "
-                        + formatPattern, e);
+                        + formatPatternTimestamp, e);
             }
         }
-        config = new Config(field, type, format, field_type, struct_field);
+        if (formatPatternDate != null && !formatPatternDate.trim().isEmpty()) {
+            try {
+                dateFormat = new SimpleDateFormat(formatPatternDate);
+                dateFormat.setTimeZone(UTC);
+            } catch (IllegalArgumentException e) {
+                throw new ConfigException("TimestampConverter requires a SimpleDateFormat-compatible pattern for string dates: "
+                        + formatPatternDate, e);
+            }
+        }
+        config = new Config(field, type, format, dateFormat, field_type, struct_field);
     }
 
     @Override
@@ -653,7 +680,13 @@ public abstract class DebeziumTimestampConverter<R extends ConnectRecord<R>> imp
         if (targetTranslator == null) {
             throw new ConnectException("Unsupported timestamp type: " + config.type);
         }
-        return targetTranslator.toType(config, rawTimestamp);
+
+        if (timestampFormat.equals(TYPE_EPCOH_DATE)) {
+            return targetTranslator.toType(config, rawTimestamp, DATE_FORMAT_CONFIG);
+        }
+        else {
+            return targetTranslator.toType(config, rawTimestamp, TIMESTAMP_FORMAT_CONFIG);
+        }
     }
 
     private Object convertTimestamp(Object timestamp) {
